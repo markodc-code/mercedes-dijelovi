@@ -347,7 +347,7 @@ async function viewAuto(id) {
     <div class="row"><div class="grow"><h2 style="margin:0">${h(carTitle(car))}</h2>
       <div class="muted">${h(carSub(car))}</div>
       <div class="mono" style="margin-top:4px">${h(car.vin)} <button class="noprint" id="kopVin" style="padding:2px 8px;font-size:12px">kopiraj</button></div></div>
-      <div class="row noprint"><a class="btn" href="#uredi" data-edit="${car.id}">Uredi</a><a class="btn" target="_blank" rel="noopener noreferrer" href="${h(katalogUrl(car))}">📘 Katalog</a><button id="csv">CSV</button>${DB.mode === 'cloud' ? '' : '<button id="ispis">Ispis</button>'}<button class="danger" id="obrisi">Obriši</button></div></div>
+      <div class="row noprint"><a class="btn" href="#uredi" data-edit="${car.id}">Uredi</a><a class="btn" target="_blank" rel="noopener noreferrer" href="${h(katalogUrl(car))}">📘 Katalog</a><button id="uvoz">📥 Uvezi iz kataloga</button><button id="csv">CSV</button>${DB.mode === 'cloud' ? '' : '<button id="ispis">Ispis</button>'}<button class="danger" id="obrisi">Obriši</button></div></div>
     <table class="info" style="margin-top:10px">${info.map(([k, v]) => `<tr><td>${h(k)}</td><td>${h(v)}</td></tr>`).join('')}
       ${Object.entries(car.oprema || {}).some(x => x[1]) ? `<tr><td>Oprema</td><td>${DIJELOVI.OPREMA.filter(([k]) => car.oprema[k]).map(x => h(x[1])).join(', ')}</td></tr>` : ''}</table>
     ${car.napomena ? `<p>${h(car.napomena)}</p>` : ''}
@@ -361,6 +361,7 @@ async function viewAuto(id) {
 
   photoStrip($('#carFoto'), car, 'auti');
   $('#kopVin').onclick = () => copyText(car.vin);
+  $('#uvoz').onclick = () => openUvoz(car, async () => { parts = await DB.byAuto(id); drawStats(); drawChips(); drawGroups(); });
   $('#ispis')?.addEventListener('click', () => window.print());
   $('#obrisi').onclick = async () => {
     if (!(await ask(`Obrisati ${carTitle(car)} i svih ${parts.length} dijelova s fotkama? Ovo se ne može vratiti.`, 'Obriši'))) return;
