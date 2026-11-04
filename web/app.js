@@ -639,12 +639,17 @@ async function viewPostavke() {
 }
 
 window.addEventListener('beforeprint', () => $$('details.grp').forEach(d => d.open = true));
+const T0 = performance.now();
+function hideSplash() {
+  const s = document.getElementById('splash'); if (!s) return;
+  setTimeout(() => { s.classList.add('out'); setTimeout(() => s.remove(), 600); }, Math.max(0, 2000 - (performance.now() - T0)));
+}
 async function start() {
   app.innerHTML = '<div class="card empty">Učitavam podatke…</div>';
   const mode = await initStorage();
   if (mode === 'nema-pristupa') {
     app.innerHTML = '<div class="card empty"><h2>Nema pristupa podacima</h2><p>Prijavi se na claude.ai računom s kojim je ova stranica podijeljena.</p></div>';
-    return;
+    hideSplash(); return;
   }
   if (DB.mode === 'cloud') {
     const SY = { ok: '✓ spremljeno', spremam: 'spremam…', greska: '⚠ greška pri spremanju', puno: '⚠ baza je puna', sporo: '⚠ spora veza' };
@@ -660,6 +665,7 @@ async function start() {
     if ('serviceWorker' in navigator && (['localhost', '127.0.0.1'].includes(location.hostname) || location.protocol === 'https:'))
       navigator.serviceWorker.register('sw.js').catch(() => { });
   }
-  route();
+  await route();
+  hideSplash();
 }
-start();
+start().catch(e => { console.error(e); hideSplash(); });
