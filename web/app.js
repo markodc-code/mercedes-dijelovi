@@ -347,7 +347,7 @@ async function viewAuto(id) {
     <div class="row"><div class="grow"><h2 style="margin:0">${h(carTitle(car))}</h2>
       <div class="muted">${h(carSub(car))}</div>
       <div class="mono" style="margin-top:4px">${h(car.vin)} <button class="noprint" id="kopVin" style="padding:2px 8px;font-size:12px">kopiraj</button></div></div>
-      <div class="row noprint"><a class="btn" href="#uredi" data-edit="${car.id}">Uredi</a><button id="csv">CSV</button>${DB.mode === 'cloud' ? '' : '<button id="ispis">Ispis</button>'}<button class="danger" id="obrisi">Obriši</button></div></div>
+      <div class="row noprint"><a class="btn" href="#uredi" data-edit="${car.id}">Uredi</a><a class="btn" target="_blank" rel="noopener noreferrer" href="${h(katalogUrl(car))}">📘 Katalog</a><button id="csv">CSV</button>${DB.mode === 'cloud' ? '' : '<button id="ispis">Ispis</button>'}<button class="danger" id="obrisi">Obriši</button></div></div>
     <table class="info" style="margin-top:10px">${info.map(([k, v]) => `<tr><td>${h(k)}</td><td>${h(v)}</td></tr>`).join('')}
       ${Object.entries(car.oprema || {}).some(x => x[1]) ? `<tr><td>Oprema</td><td>${DIJELOVI.OPREMA.filter(([k]) => car.oprema[k]).map(x => h(x[1])).join(', ')}</td></tr>` : ''}</table>
     ${car.napomena ? `<p>${h(car.napomena)}</p>` : ''}
@@ -485,6 +485,8 @@ async function oePrijedlozi(car, p) {
   for (const t of await DB.all('tipovi')) if (t.kod === car.kod && t.oe && t.oe[key]) out.add(t.oe[key]);
   return [...out].slice(0, 5);
 }
+const katalogUrl = car => car.vin && car.vin.length === 17
+  ? 'https://partsouq.com/en/search/all?q=' + encodeURIComponent(car.vin) : 'https://partsouq.com/';
 function oeGoogle(p, car) {
   const q = `Mercedes ${car.kod || ''} ${car.model || car.klasa || ''} ${p.naziv.replace(/\((L|D)\)/, m => m === '(L)' ? 'lijevi' : 'desni')} OE broj`;
   return 'https://www.google.com/search?q=' + encodeURIComponent(q.replace(/\s+/g, ' ').trim());
@@ -516,10 +518,10 @@ function openPart(p, car, onDone) {
         <div id="oeNote" class="small" style="margin:6px 4px 0"></div>
         <div class="row" style="margin-top:8px">
           <a class="btn" target="_blank" rel="noopener noreferrer" href="${h(oeGoogle(p, car))}">🔍 Google</a>
-          <a class="btn" target="_blank" rel="noopener noreferrer" href="https://7zap.com/en/catalog/cars/mercedes/">📘 Katalog 7zap</a>
+          <a class="btn" target="_blank" rel="noopener noreferrer" href="${h(katalogUrl(car))}">📘 Katalog za ovaj VIN</a>
           <button type="button" id="kopVin2">Kopiraj VIN</button>
         </div>
-        <div class="small muted" style="margin:6px 4px 0">U katalogu zalijepi VIN, nađi dio i kopiraj broj ovamo. Program ga zapamti za iduće aute istog tipa.</div>
+        <div class="small muted" style="margin:6px 4px 0">Katalog (PartSouq, besplatno) otvara točno ovaj auto po VIN-u: odaberi grupu, nađi dio i kopiraj broj ovamo (bez razmaka je u redu). Program ga zapamti za iduće aute istog tipa.</div>
       </div>
       <label class="f"><span>Lokacija (polica)</span><input name="lokacija" value="${h(p.lokacija || '')}" placeholder="R3-P2"></label>
       <label class="f"><span>Tražena cijena (€)</span><input name="cijena" inputmode="decimal" value="${h(p.cijena ?? '')}"></label>
