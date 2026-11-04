@@ -301,22 +301,26 @@ async function viewForm(id) {
       oprema: Object.fromEntries(DIJELOVI.OPREMA.map(([k]) => [k, F('op_' + k).checked])),
     });
     if (car.typ) {
-      await DB.put('tipovi', { typ: car.typ, model: car.model, motor: car.motor, kw: car.kw, gorivo: car.gorivo, mjenjac: car.mjenjac,
+      const stari = (await DB.get('tipovi', car.typ)) || {};
+      await DB.put('tipovi', { ...stari, typ: car.typ, model: car.model, motor: car.motor, kw: car.kw, gorivo: car.gorivo, mjenjac: car.mjenjac,
         karoserija: car.karoserija, pogon: car.pogon, klasa: car.klasa, kod: car.kod, updated: Date.now() });
     }
     if (!id) {
       car.id = uid(); car.created = Date.now();
       await DB.put('auti', car);
-      const parts = DIJELOVI.generate(car).map((p, i) => ({ id: uid(), autoId: car.id, grupa: p.grupa, naziv: p.naziv, status: 'Na autu', fotke: [], created: i }));
+      const oeMap = await oeZaAuto(car);
+      const parts = DIJELOVI.generate(car).map((p, i) => noviDio(car, p.grupa, p.naziv, i, oeMap));
       await DB.putMany('dijelovi', parts);
-      toast(`Spremljeno — ${parts.length} dijelova na listi`);
+      const nOe = parts.filter(x => x.oe).length;
+      toast(`Spremljeno — ${parts.length} dijelova${nOe ? `, ${nOe} OE brojeva iz ranijih auta` : ''}`);
     } else {
       await DB.put('auti', car);
       if (old !== JSON.stringify([car.gorivo, car.mjenjac, car.pogon, car.karoserija, car.oprema])) {
         const have = new Set((await DB.byAuto(car.id)).map(p => p.grupa + '|' + p.naziv));
         const nove = DIJELOVI.generate(car).filter(p => !have.has(p.grupa + '|' + p.naziv));
         if (nove.length && await ask(`Promijenili ste opremu/izvedbu. Dodati ${nove.length} dijelova koji nedostaju na listi?`)) {
-          await DB.putMany('dijelovi', nove.map((p, i) => ({ id: uid(), autoId: car.id, grupa: p.grupa, naziv: p.naziv, status: 'Na autu', fotke: [], created: Date.now() + i })));
+          const oeMap = await oeZaAuto(car);
+          await DB.putMany('dijelovi', nove.map((p, i) => noviDio(car, p.grupa, p.naziv, Date.now() + i, oeMap)));
         }
       }
       toast('Spremljeno');
@@ -417,7 +421,7 @@ async function viewAuto(id) {
       const go = async () => {
         const inp = $('input', ap); const n = inp.value.trim(); if (!n) return;
         const g = ap.closest('details').dataset.g;
-        const p = { id: uid(), autoId: car.id, grupa: g, naziv: n, status: 'Na autu', fotke: [], created: Date.now() };
+        const p = noviDio(car, g, n, Date.now(), await oeZaAuto(car));
         await DB.put('dijelovi', p); parts.push(p); otvoreneGrupe.add(g); drawStats(); drawChips(); drawGroups();
         toast('Dio dodan');
       };
@@ -438,7 +442,7 @@ function sortParts(ps) {
   return [...ps].sort((a, b) => (order[a.grupa] ?? 99) - (order[b.grupa] ?? 99) || (a.created || 0) - (b.created || 0));
 }
 function partRow(p) {
-  const meta = [p.oe ? 'OE ' + p.oe : '', p.lokacija ? '📍 ' + p.lokacija : '', (p.fotke || []).length ? '📷 ' + p.fotke.length : '',
+  const meta = [p.oe ? 'OE ' + p.oe + (p.oeAuto ? ' (provjeri)' : '') : '', p.lokacija ? '📍 ' + p.lokacija : '', (p.fotke || []).length ? '📷 ' + p.fotke.length : '',
     p.status === 'Prodano' && p.kupac ? '→ ' + p.kupac : ''].filter(Boolean).join(' · ');
   const price = p.status === 'Prodano' ? p.prodanoZa : p.cijena;
   return `<div class="part s-${h(p.status.replace(/ /g, '-'))}" data-id="${p.id}">
@@ -452,6 +456,40 @@ function toCsv(rows) {
 }
 
 // ---------- prozor jednog dijela ----------
+// ---------- OE brojevi: pamćenje po tipu auta ----------
+const oeKljuc = car => car.typ || (car.kod ? 'kod:' + car.kod : null);
+async function oeZaAuto(car) { const k = oeKljuc(car); const t = k ? await DB.get('tipovi', k) : null; return (t && t.oe) || {}; }
+function noviDio(car, grupa, naziv, created, oeMap) {
+  const p = { id: uid(), autoId: car.id, grupa, naziv, status: 'Na autu', fotke: [], created };
+  const oe = oeMap && oeMap[grupa + '|' + naziv];
+  if (oe) { p.oe = oe; p.oeAuto = true; }
+  return p;
+}
+async function zapamtiOE(car, p) {
+  const k = oeKljuc(car); if (!k || !p.oe) return 0;
+  const t = (await DB.get('tipovi', k)) || { typ: k, model: car.model, motor: car.motor, kod: car.kod, klasa: car.klasa, gorivo: car.gorivo, mjenjac: car.mjenjac };
+  t.oe = { ...(t.oe || {}), [p.grupa + '|' + p.naziv]: p.oe }; t.updated = Date.now();
+  await DB.put('tipovi', t);
+  // isti dio na drugim autima istog tipa, ako još nema broj
+  let n = 0;
+  for (const a of await DB.all('auti')) {
+    if (a.id === car.id || oeKljuc(a) !== k) continue;
+    const q = (await DB.byAuto(a.id)).find(x => x.grupa === p.grupa && x.naziv === p.naziv && !x.oe);
+    if (q) { q.oe = p.oe; q.oeAuto = true; await DB.put('dijelovi', q); n++; }
+  }
+  return n;
+}
+async function oePrijedlozi(car, p) {
+  if (!car.kod) return [];
+  const key = p.grupa + '|' + p.naziv, out = new Set();
+  for (const t of await DB.all('tipovi')) if (t.kod === car.kod && t.oe && t.oe[key]) out.add(t.oe[key]);
+  return [...out].slice(0, 5);
+}
+function oeGoogle(p, car) {
+  const q = `Mercedes ${car.kod || ''} ${car.model || car.klasa || ''} ${p.naziv.replace(/\((L|D)\)/, m => m === '(L)' ? 'lijevi' : 'desni')} OE broj`;
+  return 'https://www.google.com/search?q=' + encodeURIComponent(q.replace(/\s+/g, ' ').trim());
+}
+
 function oglas(p, car) {
   return [
     `${p.naziv} — Mercedes-Benz ${car.model || car.klasa || ''}${car.kod ? ' (' + car.kod + ')' : ''}`,
@@ -473,7 +511,16 @@ function openPart(p, car, onDone) {
       <label class="f" style="grid-column:1/-1"><span>Naziv dijela</span><input name="naziv" value="${h(p.naziv)}"></label>
       <label class="f"><span>Grupa</span><select name="grupa">${DIJELOVI.GRUPE.map(g => `<option value="${g.id}"${g.id === p.grupa ? ' selected' : ''}>${h(g.n)}</option>`).join('')}</select></label>
       <label class="f"><span>Status</span><select name="status">${opts(STATUSI, p.status)}</select></label>
-      <label class="f"><span>OE broj (A…)</span><input name="oe" value="${h(p.oe || '')}" placeholder="A2048200559"></label>
+      <div class="oebox" style="grid-column:1/-1">
+        <label class="f"><span>OE broj (originalni Mercedes broj, A…)</span><input name="oe" value="${h(p.oe || '')}" placeholder="A2048200559" autocomplete="off"></label>
+        <div id="oeNote" class="small" style="margin:6px 4px 0"></div>
+        <div class="row" style="margin-top:8px">
+          <a class="btn" target="_blank" rel="noopener noreferrer" href="${h(oeGoogle(p, car))}">🔍 Google</a>
+          <a class="btn" target="_blank" rel="noopener noreferrer" href="https://7zap.com/en/catalog/cars/mercedes/">📘 Katalog 7zap</a>
+          <button type="button" id="kopVin2">Kopiraj VIN</button>
+        </div>
+        <div class="small muted" style="margin:6px 4px 0">U katalogu zalijepi VIN, nađi dio i kopiraj broj ovamo. Program ga zapamti za iduće aute istog tipa.</div>
+      </div>
       <label class="f"><span>Lokacija (polica)</span><input name="lokacija" value="${h(p.lokacija || '')}" placeholder="R3-P2"></label>
       <label class="f"><span>Tražena cijena (€)</span><input name="cijena" inputmode="decimal" value="${h(p.cijena ?? '')}"></label>
       <label class="f"><span>Prodano za (€)</span><input name="prodanoZa" inputmode="decimal" value="${h(p.prodanoZa ?? '')}"></label>
@@ -500,7 +547,26 @@ function openPart(p, car, onDone) {
   F('status').onchange = () => {
     if (F('status').value === 'Prodano') { if (!F('datumProdaje').value) F('datumProdaje').value = today(); if (!F('prodanoZa').value) F('prodanoZa').value = F('cijena').value; }
   };
-  $('#save', m).onclick = async () => { read(); await DB.put('dijelovi', p); changed = true; toast('Spremljeno'); close(); };
+  $('#kopVin2', m).onclick = () => copyText(car.vin);
+  (async () => {
+    const note = $('#oeNote', m);
+    if (p.oe && p.oeAuto) { note.innerHTML = '<span style="color:var(--warn)">Upisano automatski iz ranijeg auta istog tipa — provjeri i spremi.</span>'; return; }
+    if (p.oe) return;
+    const prij = await oePrijedlozi(car, p);
+    if (prij.length) {
+      note.innerHTML = 'Na drugim autima (' + h(car.kod) + '): ' + prij.map(o => `<a href="#" data-oe="${h(o)}" class="mono">${h(o)}</a>`).join(', ') + ' <span class="muted">— dodirni za upis</span>';
+      $$('a[data-oe]', note).forEach(a => a.onclick = e => { e.preventDefault(); F('oe').value = a.dataset.oe; });
+    }
+  })();
+  $('#save', m).onclick = async () => {
+    read();
+    if (p.oe) p.oeAuto = false; else delete p.oeAuto;
+    await DB.put('dijelovi', p); changed = true;
+    let n = 0;
+    if (p.oe) n = await zapamtiOE(car, p);
+    toast(n ? `Spremljeno — OE broj dodan i na ${n} ${n === 1 ? 'drugi auto' : 'druga auta'}` : 'Spremljeno');
+    close();
+  };
   $('#ad', m).onclick = () => { read(); copyText(oglas(p, car)); };
   $('#del', m).onclick = async () => {
     if (!(await ask(`Obrisati „${p.naziv}“ s liste?`, 'Obriši'))) return;
@@ -599,9 +665,9 @@ async function viewPostavke() {
       ${trajno ? '' : '<button id="trajno">Zaštiti podatke od brisanja</button>'}</div></div>
   <div class="card"><h3>Naučeni tipovi (${tipovi.length})</h3>
     <p class="small muted">Kad spremiš auto, program zapamti koji model i motor odgovaraju tipu iz VIN-a (npr. 204.008). Idući auto istog tipa popuni se sam.</p>
-    <div class="scroll"><table class="t"><tr><th>Tip</th><th>Model</th><th>Motor</th><th>Gorivo</th><th>Mjenjač</th><th></th></tr>
-    ${tipovi.map(t => `<tr><td class="mono">${h(t.typ)}</td><td>${h(t.model)}</td><td>${h(t.motor)}</td><td>${h(t.gorivo)}</td><td>${h(t.mjenjac)}</td>
-      <td><button class="danger" data-t="${h(t.typ)}" style="padding:2px 8px">✕</button></td></tr>`).join('') || '<tr><td colspan="6" class="muted">Još ništa.</td></tr>'}
+    <div class="scroll"><table class="t"><tr><th>Tip</th><th>Model</th><th>Motor</th><th>Gorivo</th><th>Mjenjač</th><th class="n">OE brojeva</th><th></th></tr>
+    ${tipovi.map(t => `<tr><td class="mono">${h(t.typ)}</td><td>${h(t.model)}</td><td>${h(t.motor)}</td><td>${h(t.gorivo)}</td><td>${h(t.mjenjac)}</td><td class="n">${Object.keys(t.oe || {}).length || ''}</td>
+      <td><button class="danger" data-t="${h(t.typ)}" style="padding:2px 8px">✕</button></td></tr>`).join('') || '<tr><td colspan="7" class="muted">Još ništa.</td></tr>'}
     </table></div></div>
   <div class="card small muted"><h3 style="color:var(--ink)">O VIN-u</h3>
     Iz europskog Mercedesovog VIN-a čita se proizvođač, serija (npr. 204 = C-klasa W204), tip, karoserija, volan i tvornica.
